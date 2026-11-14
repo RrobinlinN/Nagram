@@ -21191,6 +21191,20 @@ public class ChatActivity extends BaseFragment implements
         final int index = pageBlocks.indexOf(targetBlock);
         if (index < 0) return false;
 
+        // thumbnails for the strip under the photo, as ArticleViewer sets them for its blocks
+        for (int i = 0; i < pageBlocks.size(); i++) {
+            final TL_iv.PageBlock block = pageBlocks.get(i);
+            if (block == null || block.thumb != null) continue;
+            final TLObject media = ArticleViewer.WebPageUtils.getMedia(richMessage, block);
+            if (media instanceof TLRPC.Photo) {
+                block.thumb = FileLoader.getClosestPhotoSizeWithSize(((TLRPC.Photo) media).sizes, 56, true);
+                block.thumbObject = media;
+            } else if (media instanceof TLRPC.Document) {
+                block.thumb = FileLoader.getClosestPhotoSizeWithSize(((TLRPC.Document) media).thumbs, 56, true);
+                block.thumbObject = media;
+            }
+        }
+
         PhotoViewer photoViewer = PhotoViewer.getInstance();
         photoViewer.setParentActivity(this);
         return photoViewer.openPhoto(index,

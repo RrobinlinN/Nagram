@@ -164,8 +164,9 @@ public class GroupedPhotosListView extends View implements GestureDetector.OnGes
                 changed = true;
                 currentGroupId = pageBlock.groupId;
             }
-            if (currentGroupId != 0) {
-                hasPhotos = true;
+            // Media outside of a slideshow or a collage has no group id. Such blocks that
+            // follow each other are shown as one strip too, when they carry a thumbnail.
+            if (currentGroupId != 0 || pageBlock.thumb != null) {
                 for (int a = currentIndex, size = pageBlockArr.size(); a < size; a++) {
                     TL_iv.PageBlock object = pageBlockArr.get(a);
                     if (object.groupId == currentGroupId) {
@@ -181,6 +182,10 @@ public class GroupedPhotosListView extends View implements GestureDetector.OnGes
                     } else {
                         break;
                     }
+                }
+                hasPhotos = currentGroupId != 0 || newCount > 1;
+                if (!hasPhotos) {
+                    newCount = 0;
                 }
             }
         }
@@ -312,7 +317,7 @@ public class GroupedPhotosListView extends View implements GestureDetector.OnGes
                     }
                 }
             } else if (pageBlockArr != null && !pageBlockArr.isEmpty()) {
-                if (currentGroupId != 0) {
+                if (hasPhotos) {
                     for (int a = currentIndex, size = pageBlockArr.size(); a < size; a++) {
                         TL_iv.PageBlock object = pageBlockArr.get(a);
                         if (object.groupId == currentGroupId) {
