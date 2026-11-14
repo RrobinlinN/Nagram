@@ -14522,7 +14522,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 } else if (!messageObject.scheduled && !messageObject.isQuickReply() && !messageObject.isSponsored() && !(MessageObject.getMedia(messageObject.messageOwner) instanceof TLRPC.TL_messageMediaInvoice) && !(MessageObject.getMedia(messageObject.messageOwner) instanceof TLRPC.TL_messageMediaWebPage) && (messageObject.messageOwner.action == null || messageObject.messageOwner.action instanceof TLRPC.TL_messageActionEmpty)) {
                     needSearchImageInArr = true;
                     imagesByIds[0].put(messageObject.getId(), messageObject);
-                    openingIndex = addAlbumSiblingsFromChat(messageObject);
+                    openingIndex = addNeighborsFromChat(messageObject);
                     if (parentChatActivity == null || !parentChatActivity.isThreadChat() && parentChatActivity.getChatMode() != ChatActivity.MODE_SAVED && parentChatActivity.getChatMode() != ChatActivity.MODE_QUICK_REPLIES) {
                         menuItem.showSubItem(gallery_menu_showinchat);
                         boolean canWrite = true;
@@ -14854,48 +14854,62 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     }
 
     /**
-     * Opening a photo from a chat puts only that message into imagesArr. Its album
-     * siblings arrive later, when the media-history search (newest to oldest, page by
-     * page) reaches the message. Until then GroupedPhotosListView sees a single item
-     * and shows no thumbnails, which is permanent when the search is slow or gives up.
-     * The chat already holds the complete album, so add its siblings right away.
+     * Opening a photo from a chat puts only that message into imagesArr. The rest of the
+     * list arrives later, when the media-history search (newest to oldest, page by page)
+     * reaches the message. Until then GroupedPhotosListView sees a single item and shows
+     * no thumbnails, and there is nothing to swipe to, which is permanent when the search
+     * is slow or gives up.
+     * The chat already holds the album and the media of the messages around it, so add
+     * them right away: the album gets its thumbnails and swiping reaches the neighbouring
+     * messages without waiting for the search. In chat modes whose list is not a
+     * contiguous piece of history only the album itself is added.
      *
      * @return index of messageObject in imagesArr
      */
-    private int addAlbumSiblingsFromChat(MessageObject messageObject) {
+    private int addNeighborsFromChat(MessageObject messageObject) {
         if (parentChatActivity == null || messageObject == null || messageObject.messageOwner == null || messageObject.getId() <= 0 || DialogObject.isEncryptedDialog(messageObject.getDialogId())) {
             return 0;
         }
+        final int chatMode = parentChatActivity.getChatMode();
+        final boolean albumOnly = chatMode != ChatActivity.MODE_DEFAULT && chatMode != ChatActivity.MODE_SAVED;
         final long groupId = messageObject.getGroupIdForUse();
-        if (groupId == 0) {
-            return 0;
-        }
-        final MessageObject.GroupedMessages group = parentChatActivity.getValidGroupedMessage(messageObject);
-        if (group == null) {
+        if (albumOnly && groupId == 0) {
             return 0;
         }
         final long dialogId = messageObject.getDialogId();
-        final ArrayList<MessageObject> album = new ArrayList<>();
-        for (int i = 0; i < group.messages.size(); i++) {
-            final MessageObject message = group.messages.get(i);
-            if (message == null || message.messageOwner == null || message.getId() <= 0 || message.getId() == messageObject.getId() || message.scheduled
-                    || message.getDialogId() != dialogId || message.getGroupIdForUse() != groupId || message.isHiddenSensitive()
-                    || MediaDataController.getMediaType(message.messageOwner) != sharedMediaType) {
+        final int loadIndex = dialogId == currentDialogId ? 0 : 1;
+        final ArrayList<MessageObject> chatMessages = parentChatActivity.messages;
+        final ArrayList<MessageObject> neighbors = new ArrayList<>();
+        final SparseArray<MessageObject> added = new SparseArray<>();
+        boolean openedMessageIsInChat = false;
+        for (int i = 0; i < chatMessages.size(); i++) {
+            final MessageObject message = chatMessages.get(i);
+            if (message == null || message.messageOwner == null || message.getId() <= 0 || message.getDialogId() != dialogId) {
                 continue;
             }
-            album.add(message);
+            if (message.getId() == messageObject.getId()) {
+                openedMessageIsInChat = true;
+                continue;
+            }
+            if (message.scheduled || message.isSponsored() || message.isHiddenSensitive() || added.indexOfKey(message.getId()) >= 0
+                    || albumOnly && message.getGroupIdForUse() != groupId
+                    || MediaDataController.getMediaType(message.messageOwner) != sharedMediaType
+                    || !MediaDataController.canAddMessageToMedia(message.messageOwner)) {
+                continue;
+            }
+            added.put(message.getId(), message);
+            neighbors.add(message);
         }
-        if (album.isEmpty()) {
+        if (!openedMessageIsInChat || neighbors.isEmpty()) {
             return 0;
         }
-        final int loadIndex = dialogId == currentDialogId ? 0 : 1;
-        for (int i = 0; i < album.size(); i++) {
-            imagesByIds[loadIndex].put(album.get(i).getId(), album.get(i));
+        for (int i = 0; i < neighbors.size(); i++) {
+            imagesByIds[loadIndex].put(neighbors.get(i).getId(), neighbors.get(i));
         }
-        album.add(messageObject);
-        Collections.sort(album, (a, b) -> Integer.compare(a.getId(), b.getId()));
+        neighbors.add(messageObject);
+        Collections.sort(neighbors, (a, b) -> Integer.compare(a.getId(), b.getId()));
         imagesArr.clear();
-        imagesArr.addAll(album);
+        imagesArr.addAll(neighbors);
         return imagesArr.indexOf(messageObject);
     }
 
