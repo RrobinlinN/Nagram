@@ -4469,6 +4469,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                     }
 
                     if (foundIndex != -1) {
+                        foundIndex = keepAlbumSiblings(currentMessage, foundIndex);
                         imagesArr.clear();
                         imagesArr.addAll(imagesArrTemp);
                         for (int a = 0; a < 2; a++) {
@@ -14508,6 +14509,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
             }
             if (slideshowMessageId == 0) {
                 imagesArr.add(messageObject);
+                int openingIndex = 0;
                 menuItem.setSubItemShown(gallery_menu_create_sticker, !noforwards && messageObject.isPhoto() && !messageObject.isLivePhoto());
                 if (messageObject.eventId != 0) {
                     needSearchImageInArr = false;
@@ -14520,6 +14522,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 } else if (!messageObject.scheduled && !messageObject.isQuickReply() && !messageObject.isSponsored() && !(MessageObject.getMedia(messageObject.messageOwner) instanceof TLRPC.TL_messageMediaInvoice) && !(MessageObject.getMedia(messageObject.messageOwner) instanceof TLRPC.TL_messageMediaWebPage) && (messageObject.messageOwner.action == null || messageObject.messageOwner.action instanceof TLRPC.TL_messageActionEmpty)) {
                     needSearchImageInArr = true;
                     imagesByIds[0].put(messageObject.getId(), messageObject);
+                    openingIndex = addAlbumSiblingsFromChat(messageObject);
                     if (parentChatActivity == null || !parentChatActivity.isThreadChat() && parentChatActivity.getChatMode() != ChatActivity.MODE_SAVED && parentChatActivity.getChatMode() != ChatActivity.MODE_QUICK_REPLIES) {
                         menuItem.showSubItem(gallery_menu_showinchat);
                         boolean canWrite = true;
@@ -14541,7 +14544,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                     setItemVisible(sendNoQuoteItem, true, false);
                     setItemVisible(sendItem, true, false);
                 }
-                setImageIndex(0);
+                setImageIndex(openingIndex);
             }
         } else if (documents != null) {
             secureDocuments.addAll(documents);
@@ -14848,6 +14851,120 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     private void setDoubleTapEnabled(boolean value) {
         doubleTapEnabled = value;
         gestureDetector.setOnDoubleTapListener(value ? this : null);
+    }
+
+    /**
+     * Opening a photo from a chat puts only that message into imagesArr. Its album
+     * siblings arrive later, when the media-history search (newest to oldest, page by
+     * page) reaches the message. Until then GroupedPhotosListView sees a single item
+     * and shows no thumbnails, which is permanent when the search is slow or gives up.
+     * The chat already holds the complete album, so add its siblings right away.
+     *
+     * @return index of messageObject in imagesArr
+     */
+    private int addAlbumSiblingsFromChat(MessageObject messageObject) {
+        if (parentChatActivity == null || messageObject == null || messageObject.messageOwner == null || messageObject.getId() <= 0 || DialogObject.isEncryptedDialog(messageObject.getDialogId())) {
+            return 0;
+        }
+        final long groupId = messageObject.getGroupIdForUse();
+        if (groupId == 0) {
+            return 0;
+        }
+        final MessageObject.GroupedMessages group = parentChatActivity.getValidGroupedMessage(messageObject);
+        if (group == null) {
+            return 0;
+        }
+        final long dialogId = messageObject.getDialogId();
+        final ArrayList<MessageObject> album = new ArrayList<>();
+        for (int i = 0; i < group.messages.size(); i++) {
+            final MessageObject message = group.messages.get(i);
+            if (message == null || message.messageOwner == null || message.getId() <= 0 || message.getId() == messageObject.getId() || message.scheduled
+                    || message.getDialogId() != dialogId || message.getGroupIdForUse() != groupId || message.isHiddenSensitive()
+                    || MediaDataController.getMediaType(message.messageOwner) != sharedMediaType) {
+                continue;
+            }
+            album.add(message);
+        }
+        if (album.isEmpty()) {
+            return 0;
+        }
+        final int loadIndex = dialogId == currentDialogId ? 0 : 1;
+        for (int i = 0; i < album.size(); i++) {
+            imagesByIds[loadIndex].put(album.get(i).getId(), album.get(i));
+        }
+        album.add(messageObject);
+        Collections.sort(album, (a, b) -> Integer.compare(a.getId(), b.getId()));
+        imagesArr.clear();
+        imagesArr.addAll(album);
+        return imagesArr.indexOf(messageObject);
+    }
+
+    /**
+     * The media-history page that contains the opened message can end in the middle of
+     * its album. Carry the siblings already shown over from imagesArr, so that replacing
+     * it with imagesArrTemp does not drop them.
+     *
+     * @return index of currentMessage in imagesArrTemp
+     */
+    private int keepAlbumSiblings(MessageObject currentMessage, int foundIndex) {
+        final long groupId = currentMessage.getGroupIdForUse();
+        if (opennedFromMedia || groupId == 0 || imagesArr.size() <= 1) {
+            return foundIndex;
+        }
+        final long dialogId = currentMessage.getDialogId();
+        final int loadIndex = dialogId == currentDialogId ? 0 : 1;
+        ArrayList<MessageObject> missing = null;
+        for (int i = 0; i < imagesArr.size(); i++) {
+            final MessageObject sibling = imagesArr.get(i);
+            if (sibling.getId() == currentMessage.getId() || sibling.getDialogId() != dialogId || sibling.getGroupIdForUse() != groupId
+                    || imagesByIdsTemp[loadIndex].indexOfKey(sibling.getId()) >= 0) {
+                continue;
+            }
+            if (missing == null) {
+                missing = new ArrayList<>();
+            }
+            missing.add(sibling);
+        }
+        if (missing == null) {
+            return foundIndex;
+        }
+        int currentIndexInTemp = -1;
+        for (int i = 0; i < imagesArrTemp.size(); i++) {
+            final MessageObject message = imagesArrTemp.get(i);
+            if (message.getDialogId() == dialogId && message.getId() == currentMessage.getId()) {
+                currentIndexInTemp = i;
+                break;
+            }
+        }
+        if (currentIndexInTemp < 0) {
+            return foundIndex;
+        }
+        for (int i = 0; i < missing.size(); i++) {
+            final MessageObject sibling = missing.get(i);
+            // imagesArrTemp is ordered oldest to newest here
+            int insertAt = -1;
+            int lastSameDialog = -1;
+            for (int j = 0; j < imagesArrTemp.size(); j++) {
+                final MessageObject message = imagesArrTemp.get(j);
+                if (message.getDialogId() != dialogId) {
+                    continue;
+                }
+                lastSameDialog = j;
+                if (message.getId() > sibling.getId()) {
+                    insertAt = j;
+                    break;
+                }
+            }
+            if (insertAt < 0) {
+                insertAt = lastSameDialog + 1;
+            }
+            imagesArrTemp.add(insertAt, sibling);
+            imagesByIdsTemp[loadIndex].put(sibling.getId(), sibling);
+            if (insertAt <= currentIndexInTemp) {
+                currentIndexInTemp++;
+            }
+        }
+        return currentIndexInTemp;
     }
 
     private void setImages() {
